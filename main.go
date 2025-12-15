@@ -10,6 +10,7 @@ import (
 	"embed"
 	"encoding/csv"
 	"fmt"
+	"image/color"
 	"io"
 	"math"
 	"math/rand"
@@ -120,138 +121,140 @@ func Load() []Fisher {
 }
 
 func main() {
-	const (
-		Width = 2 // 5
-	)
-	rng := rand.New(rand.NewSource(1))
 	iris := Load()
-	others := tf64.NewSet()
-	others.Add("x", 4, len(iris))
-	x := others.ByName["x"]
-	for _, row := range iris {
-		x.X = append(x.X, row.Measures...)
-	}
+	process := func(width int) *tf64.V {
+		rng := rand.New(rand.NewSource(1))
+		others := tf64.NewSet()
+		others.Add("x", 4, len(iris))
+		x := others.ByName["x"]
+		for _, row := range iris {
+			x.X = append(x.X, row.Measures...)
+		}
 
-	set := tf64.NewSet()
-	set.Add("i", Width, len(iris))
+		set := tf64.NewSet()
+		set.Add("i", width, len(iris))
 
-	for ii := range set.Weights {
-		w := set.Weights[ii]
-		if strings.HasPrefix(w.N, "b") {
-			w.X = w.X[:cap(w.X)]
+		for ii := range set.Weights {
+			w := set.Weights[ii]
+			if strings.HasPrefix(w.N, "b") {
+				w.X = w.X[:cap(w.X)]
+				w.States = make([][]float64, StateTotal)
+				for ii := range w.States {
+					w.States[ii] = make([]float64, len(w.X))
+				}
+				continue
+			}
+			factor := math.Sqrt(2.0 / float64(w.S[0]))
+			for range cap(w.X) {
+				w.X = append(w.X, rng.NormFloat64()*factor*.01)
+			}
 			w.States = make([][]float64, StateTotal)
 			for ii := range w.States {
 				w.States[ii] = make([]float64, len(w.X))
 			}
-			continue
-		}
-		factor := math.Sqrt(2.0 / float64(w.S[0]))
-		for range cap(w.X) {
-			w.X = append(w.X, rng.NormFloat64()*factor*.01)
-		}
-		w.States = make([][]float64, StateTotal)
-		for ii := range w.States {
-			w.States[ii] = make([]float64, len(w.X))
-		}
-	}
-
-	drop := .3
-	dropout := map[string]interface{}{
-		"rng":  rng,
-		"drop": &drop,
-	}
-
-	sa := tf64.T(tf64.Mul(tf64.Dropout(tf64.MulS(set.Get("i"), set.Get("i")), dropout), tf64.T(others.Get("x"))))
-	loss := tf64.Avg(tf64.Quadratic(others.Get("x"), sa))
-
-	for iteration := range 2 * 1024 {
-		pow := func(x float64) float64 {
-			y := math.Pow(x, float64(iteration+1))
-			if math.IsNaN(y) || math.IsInf(y, 0) {
-				return 0
-			}
-			return y
 		}
 
-		set.Zero()
-		others.Zero()
-		l := tf64.Gradient(loss).X[0]
-		if math.IsNaN(float64(l)) || math.IsInf(float64(l), 0) {
-			fmt.Println(iteration, l)
-			return
+		drop := .3
+		dropout := map[string]interface{}{
+			"rng":  rng,
+			"drop": &drop,
 		}
 
-		norm := 0.0
-		for _, p := range set.Weights {
-			for _, d := range p.D {
-				norm += d * d
-			}
-		}
-		norm = math.Sqrt(norm)
-		b1, b2 := pow(B1), pow(B2)
-		scaling := 1.0
-		if norm > 1 {
-			scaling = 1 / norm
-		}
-		for _, w := range set.Weights {
-			for ii, d := range w.D {
-				g := d * scaling
-				m := B1*w.States[StateM][ii] + (1-B1)*g
-				v := B2*w.States[StateV][ii] + (1-B2)*g*g
-				w.States[StateM][ii] = m
-				w.States[StateV][ii] = v
-				mhat := m / (1 - b1)
-				vhat := v / (1 - b2)
-				if vhat < 0 {
-					vhat = 0
+		sa := tf64.T(tf64.Mul(tf64.Dropout(tf64.MulS(set.Get("i"), set.Get("i")), dropout), tf64.T(others.Get("x"))))
+		loss := tf64.Avg(tf64.Quadratic(others.Get("x"), sa))
+
+		for iteration := range 2 * 1024 {
+			pow := func(x float64) float64 {
+				y := math.Pow(x, float64(iteration+1))
+				if math.IsNaN(y) || math.IsInf(y, 0) {
+					return 0
 				}
-				w.X[ii] -= Eta * mhat / (math.Sqrt(vhat) + 1e-8)
+				return y
 			}
-		}
-		fmt.Println(l)
-	}
 
-	meta := make([][]float64, len(iris))
-	for i := range meta {
-		meta[i] = make([]float64, len(iris))
-	}
-	const k = 3
+			set.Zero()
+			others.Zero()
+			l := tf64.Gradient(loss).X[0]
+			if math.IsNaN(float64(l)) || math.IsInf(float64(l), 0) {
+				fmt.Println(iteration, l)
+				return nil
+			}
 
-	{
-		y := set.ByName["i"]
-		vectors := make([][]float64, len(iris))
-		for i := range vectors {
-			row := make([]float64, Width)
-			for ii := range row {
-				row[ii] = y.X[i*Width+ii]
+			norm := 0.0
+			for _, p := range set.Weights {
+				for _, d := range p.D {
+					norm += d * d
+				}
 			}
-			vectors[i] = row
+			norm = math.Sqrt(norm)
+			b1, b2 := pow(B1), pow(B2)
+			scaling := 1.0
+			if norm > 1 {
+				scaling = 1 / norm
+			}
+			for _, w := range set.Weights {
+				for ii, d := range w.D {
+					g := d * scaling
+					m := B1*w.States[StateM][ii] + (1-B1)*g
+					v := B2*w.States[StateV][ii] + (1-B2)*g*g
+					w.States[StateM][ii] = m
+					w.States[StateV][ii] = v
+					mhat := m / (1 - b1)
+					vhat := v / (1 - b2)
+					if vhat < 0 {
+						vhat = 0
+					}
+					w.X[ii] -= Eta * mhat / (math.Sqrt(vhat) + 1e-8)
+				}
+			}
+			fmt.Println(l)
 		}
-		for i := 0; i < 33; i++ {
-			clusters, _, err := kmeans.Kmeans(int64(i+1), vectors, k, kmeans.SquaredEuclideanDistance, -1)
-			if err != nil {
-				panic(err)
+
+		meta := make([][]float64, len(iris))
+		for i := range meta {
+			meta[i] = make([]float64, len(iris))
+		}
+		const k = 3
+
+		{
+			y := set.ByName["i"]
+			vectors := make([][]float64, len(iris))
+			for i := range vectors {
+				row := make([]float64, width)
+				for ii := range row {
+					row[ii] = y.X[i*width+ii]
+				}
+				vectors[i] = row
 			}
-			for i := 0; i < len(meta); i++ {
-				target := clusters[i]
-				for j, v := range clusters {
-					if v == target {
-						meta[i][j]++
+			for i := 0; i < 33; i++ {
+				clusters, _, err := kmeans.Kmeans(int64(i+1), vectors, k, kmeans.SquaredEuclideanDistance, -1)
+				if err != nil {
+					panic(err)
+				}
+				for i := 0; i < len(meta); i++ {
+					target := clusters[i]
+					for j, v := range clusters {
+						if v == target {
+							meta[i][j]++
+						}
 					}
 				}
 			}
 		}
+		clusters, _, err := kmeans.Kmeans(1, meta, 3, kmeans.SquaredEuclideanDistance, -1)
+		if err != nil {
+			panic(err)
+		}
+		for i := range clusters {
+			iris[i].Cluster = clusters[i]
+		}
+		sort.Slice(iris, func(i, j int) bool {
+			return iris[i].Cluster < iris[j].Cluster
+		})
+		return set.ByName["i"]
 	}
-	clusters, _, err := kmeans.Kmeans(1, meta, 3, kmeans.SquaredEuclideanDistance, -1)
-	if err != nil {
-		panic(err)
-	}
-	for i := range clusters {
-		iris[i].Cluster = clusters[i]
-	}
-	sort.Slice(iris, func(i, j int) bool {
-		return iris[i].Cluster < iris[j].Cluster
-	})
+
+	I := process(2)
 	acc := make(map[string][3]int)
 	for i := range iris {
 		fmt.Println(iris[i].Cluster, iris[i].Label)
@@ -259,14 +262,19 @@ func main() {
 		counts[iris[i].Cluster]++
 		acc[iris[i].Label] = counts
 	}
-	for i, v := range acc {
-		fmt.Println(i, v)
+
+	process(5)
+	acc5 := make(map[string][3]int)
+	for i := range iris {
+		fmt.Println(iris[i].Cluster, iris[i].Label)
+		counts := acc5[iris[i].Label]
+		counts[iris[i].Cluster]++
+		acc5[iris[i].Label] = counts
 	}
 
-	I := set.ByName["i"]
-	points := make(plotter.XYs, 0, 8)
+	points := make([]plotter.XYs, 3)
 	for i := range len(iris) {
-		points = append(points, plotter.XY{X: I.X[i*2], Y: I.X[i*2+1]})
+		points[iris[i].Cluster] = append(points[iris[i].Cluster], plotter.XY{X: I.X[i*2], Y: I.X[i*2+1]})
 	}
 	p := plot.New()
 
@@ -274,16 +282,32 @@ func main() {
 	p.X.Label.Text = "x"
 	p.Y.Label.Text = "y"
 
-	scatter, err := plotter.NewScatter(points)
+	colors := make([]color.RGBA, len(points))
+	colors[0] = color.RGBA{R: 255, A: 255}
+	colors[1] = color.RGBA{G: 255, A: 255}
+	colors[2] = color.RGBA{B: 255, A: 255}
+
+	for i := range points {
+		scatter, err := plotter.NewScatter(points[i])
+		if err != nil {
+			panic(err)
+		}
+		scatter.GlyphStyle.Radius = vg.Length(1)
+		scatter.GlyphStyle.Shape = draw.CircleGlyph{}
+		scatter.GlyphStyle.Color = colors[i]
+		p.Add(scatter)
+	}
+
+	err := p.Save(8*vg.Inch, 8*vg.Inch, "clusters.png")
 	if err != nil {
 		panic(err)
 	}
-	scatter.GlyphStyle.Radius = vg.Length(1)
-	scatter.GlyphStyle.Shape = draw.CircleGlyph{}
-	p.Add(scatter)
 
-	err = p.Save(8*vg.Inch, 8*vg.Inch, "clusters.png")
-	if err != nil {
-		panic(err)
+	for i, v := range acc {
+		fmt.Println(i, v)
+	}
+	fmt.Println()
+	for i, v := range acc5 {
+		fmt.Println(i, v)
 	}
 }
