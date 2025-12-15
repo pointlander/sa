@@ -19,6 +19,11 @@ import (
 
 	"github.com/pointlander/gradient/tf64"
 	"github.com/pointlander/sa/kmeans"
+
+	"gonum.org/v1/plot"
+	"gonum.org/v1/plot/plotter"
+	"gonum.org/v1/plot/vg"
+	"gonum.org/v1/plot/vg/draw"
 )
 
 const (
@@ -256,5 +261,29 @@ func main() {
 	}
 	for i, v := range acc {
 		fmt.Println(i, v)
+	}
+
+	I := set.ByName["i"]
+	points := make(plotter.XYs, 0, 8)
+	for i := range len(iris) {
+		points = append(points, plotter.XY{X: I.X[i*2], Y: I.X[i*2+1]})
+	}
+	p := plot.New()
+
+	p.Title.Text = "x vs y"
+	p.X.Label.Text = "x"
+	p.Y.Label.Text = "y"
+
+	scatter, err := plotter.NewScatter(points)
+	if err != nil {
+		panic(err)
+	}
+	scatter.GlyphStyle.Radius = vg.Length(1)
+	scatter.GlyphStyle.Shape = draw.CircleGlyph{}
+	p.Add(scatter)
+
+	err = p.Save(8*vg.Inch, 8*vg.Inch, "clusters.png")
+	if err != nil {
+		panic(err)
 	}
 }
