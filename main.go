@@ -61,13 +61,15 @@ var Labels = map[string]int{
 	"Iris-setosa":     0,
 	"Iris-versicolor": 1,
 	"Iris-virginica":  2,
+	"gen":             3,
 }
 
 // Inverse is the labels inverse map
-var Inverse = [3]string{
+var Inverse = [4]string{
 	"Iris-setosa",
 	"Iris-versicolor",
 	"Iris-virginica",
+	"gen",
 }
 
 // Load loads the iris data set
@@ -122,17 +124,31 @@ func Load() []Fisher {
 
 func main() {
 	iris := Load()
-	process := func(width int) *tf64.V {
+	process := func(width int) (*tf64.V, []Fisher) {
 		rng := rand.New(rand.NewSource(1))
 		others := tf64.NewSet()
-		others.Add("x", 4, len(iris))
+		cp := make([]Fisher, len(iris)+1)
+		copy(cp, iris)
+		cp[len(iris)].Label = "gen"
+		cp[len(iris)].Index = len(iris)
+		others.Add("x", 4, len(cp))
 		x := others.ByName["x"]
 		for _, row := range iris {
 			x.X = append(x.X, row.Measures...)
 		}
+		{
+			w := x
+			for range 4 {
+				w.X = append(w.X, rng.Float64())
+			}
+			w.States = make([][]float64, StateTotal)
+			for ii := range w.States {
+				w.States[ii] = make([]float64, len(w.X))
+			}
+		}
 
 		set := tf64.NewSet()
-		set.Add("i", width, len(iris))
+		set.Add("i", width, len(cp))
 
 		for ii := range set.Weights {
 			w := set.Weights[ii]
@@ -177,7 +193,7 @@ func main() {
 			l := tf64.Gradient(loss).X[0]
 			if math.IsNaN(float64(l)) || math.IsInf(float64(l), 0) {
 				fmt.Println(iteration, l)
-				return nil
+				return nil, nil
 			}
 
 			norm := 0.0
@@ -207,18 +223,86 @@ func main() {
 					w.X[ii] -= Eta * mhat / (math.Sqrt(vhat) + 1e-8)
 				}
 			}
+			{
+				w := x
+				offset := len(iris) * 4
+				D := w.D[offset:]
+				for ii, d := range D {
+					g := d * scaling
+					m := B1*w.States[StateM][offset+ii] + (1-B1)*g
+					v := B2*w.States[StateV][offset+ii] + (1-B2)*g*g
+					w.States[StateM][offset+ii] = m
+					w.States[StateV][offset+ii] = v
+					mhat := m / (1 - b1)
+					vhat := v / (1 - b2)
+					if vhat < 0 {
+						vhat = 0
+					}
+					w.X[offset+ii] -= Eta * mhat / (math.Sqrt(vhat) + 1e-8)
+				}
+			}
 			fmt.Println(l)
 		}
 
-		meta := make([][]float64, len(iris))
+		for iteration := range 2 * 1024 {
+			pow := func(x float64) float64 {
+				y := math.Pow(x, float64(iteration+1))
+				if math.IsNaN(y) || math.IsInf(y, 0) {
+					return 0
+				}
+				return y
+			}
+
+			set.Zero()
+			others.Zero()
+			l := tf64.Gradient(loss).X[0]
+			if math.IsNaN(float64(l)) || math.IsInf(float64(l), 0) {
+				fmt.Println(iteration, l)
+				return nil, nil
+			}
+
+			norm := 0.0
+			for _, p := range set.Weights {
+				for _, d := range p.D {
+					norm += d * d
+				}
+			}
+			norm = math.Sqrt(norm)
+			b1, b2 := pow(B1), pow(B2)
+			scaling := 1.0
+			if norm > 1 {
+				scaling = 1 / norm
+			}
+			{
+				w := x
+				offset := len(iris) * 4
+				D := w.D[offset:]
+				for ii, d := range D {
+					g := d * scaling
+					m := B1*w.States[StateM][offset+ii] + (1-B1)*g
+					v := B2*w.States[StateV][offset+ii] + (1-B2)*g*g
+					w.States[StateM][offset+ii] = m
+					w.States[StateV][offset+ii] = v
+					mhat := m / (1 - b1)
+					vhat := v / (1 - b2)
+					if vhat < 0 {
+						vhat = 0
+					}
+					w.X[offset+ii] -= Eta * mhat / (math.Sqrt(vhat) + 1e-8)
+				}
+			}
+			fmt.Println(l)
+		}
+
+		meta := make([][]float64, len(cp))
 		for i := range meta {
-			meta[i] = make([]float64, len(iris))
+			meta[i] = make([]float64, len(cp))
 		}
 		const k = 3
 
 		{
 			y := set.ByName["i"]
-			vectors := make([][]float64, len(iris))
+			vectors := make([][]float64, len(cp))
 			for i := range vectors {
 				row := make([]float64, width)
 				for ii := range row {
@@ -246,35 +330,38 @@ func main() {
 			panic(err)
 		}
 		for i := range clusters {
-			iris[i].Cluster = clusters[i]
+			cp[i].Cluster = clusters[i]
 		}
-		sort.Slice(iris, func(i, j int) bool {
-			return iris[i].Cluster < iris[j].Cluster
+		for _, value := range x.X[len(iris)*4:] {
+			cp[len(iris)].Measures = append(cp[len(iris)].Measures, value)
+		}
+		sort.Slice(cp, func(i, j int) bool {
+			return cp[i].Cluster < cp[j].Cluster
 		})
-		return set.ByName["i"]
+		return set.ByName["i"], cp
 	}
 
-	I := process(2)
-	acc := make(map[string][3]int)
-	for i := range iris {
-		fmt.Println(iris[i].Cluster, iris[i].Label)
-		counts := acc[iris[i].Label]
-		counts[iris[i].Cluster]++
-		acc[iris[i].Label] = counts
+	I, cp := process(2)
+	acc := make(map[string][4]int)
+	for i := range cp {
+		fmt.Println(cp[i].Cluster, cp[i].Label)
+		counts := acc[cp[i].Label]
+		counts[cp[i].Cluster]++
+		acc[cp[i].Label] = counts
 	}
 
-	process(5)
-	acc5 := make(map[string][3]int)
-	for i := range iris {
-		fmt.Println(iris[i].Cluster, iris[i].Label)
-		counts := acc5[iris[i].Label]
-		counts[iris[i].Cluster]++
-		acc5[iris[i].Label] = counts
+	_, cp5 := process(5)
+	acc5 := make(map[string][4]int)
+	for i := range cp5 {
+		fmt.Println(cp5[i].Cluster, cp5[i].Label)
+		counts := acc5[cp5[i].Label]
+		counts[cp5[i].Cluster]++
+		acc5[cp5[i].Label] = counts
 	}
 
-	points := make([]plotter.XYs, 3)
-	for i := range len(iris) {
-		points[iris[i].Cluster] = append(points[iris[i].Cluster], plotter.XY{X: I.X[i*2], Y: I.X[i*2+1]})
+	points := make([]plotter.XYs, 4)
+	for i := range len(cp5) {
+		points[cp5[i].Cluster] = append(points[cp5[i].Cluster], plotter.XY{X: I.X[i*2], Y: I.X[i*2+1]})
 	}
 	p := plot.New()
 
@@ -286,6 +373,7 @@ func main() {
 	colors[0] = color.RGBA{R: 255, A: 255}
 	colors[1] = color.RGBA{G: 255, A: 255}
 	colors[2] = color.RGBA{B: 255, A: 255}
+	colors[3] = color.RGBA{R: 255, G: 255, A: 255}
 
 	for i := range points {
 		scatter, err := plotter.NewScatter(points[i])
@@ -309,5 +397,10 @@ func main() {
 	fmt.Println()
 	for i, v := range acc5 {
 		fmt.Println(i, v)
+	}
+	for _, value := range cp {
+		if value.Label == "gen" {
+			fmt.Println(value.Measures)
+		}
 	}
 }
