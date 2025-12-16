@@ -124,6 +124,15 @@ func Load() []Fisher {
 
 func main() {
 	iris := Load()
+	average := make([]float64, 4)
+	for _, row := range iris {
+		for i, value := range row.Measures {
+			average[i] += value
+		}
+	}
+	for i, value := range average {
+		average[i] = value / float64(len(iris))
+	}
 	process := func(width int) (*tf64.V, []Fisher) {
 		rng := rand.New(rand.NewSource(1))
 		others := tf64.NewSet()
@@ -138,8 +147,8 @@ func main() {
 		}
 		{
 			w := x
-			for range 4 {
-				w.X = append(w.X, rng.Float64())
+			for i := range 4 {
+				w.X = append(w.X, rng.Float64()*average[i])
 			}
 			w.States = make([][]float64, StateTotal)
 			for ii := range w.States {
@@ -398,7 +407,14 @@ func main() {
 	for i, v := range acc5 {
 		fmt.Println(i, v)
 	}
+
+	fmt.Println(average)
 	for _, value := range cp {
+		if value.Label == "gen" {
+			fmt.Println(value.Measures)
+		}
+	}
+	for _, value := range cp5 {
 		if value.Label == "gen" {
 			fmt.Println(value.Measures)
 		}
