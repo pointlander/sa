@@ -9,6 +9,7 @@ import (
 	"bytes"
 	"embed"
 	"encoding/csv"
+	"flag"
 	"fmt"
 	"image/color"
 	"io"
@@ -50,10 +51,11 @@ var Iris embed.FS
 
 // Fisher is the fisher iris data
 type Fisher struct {
-	Measures []float64
-	Label    string
-	Cluster  int
-	Index    int
+	Measures  []float64
+	Embedding []float64
+	Label     string
+	Cluster   int
+	Index     int
 }
 
 // Labels maps iris labels to ints
@@ -122,7 +124,14 @@ func Load() []Fisher {
 	return fisher
 }
 
+var (
+	// FlagGen generation mode
+	FlagGen = flag.Bool("gen", false, "generation mode")
+)
+
 func main() {
+	flag.Parse()
+
 	iris := Load()
 	average := make([]float64, 4)
 	for _, row := range iris {
@@ -133,19 +142,25 @@ func main() {
 	for i, value := range average {
 		average[i] = value / float64(len(iris))
 	}
-	process := func(width int) (*tf64.V, []Fisher) {
+	process := func(width int) []Fisher {
 		rng := rand.New(rand.NewSource(1))
 		others := tf64.NewSet()
-		cp := make([]Fisher, len(iris)+1)
+		length := len(iris)
+		if *FlagGen {
+			length++
+		}
+		cp := make([]Fisher, length)
 		copy(cp, iris)
-		cp[len(iris)].Label = "gen"
-		cp[len(iris)].Index = len(iris)
+		if *FlagGen {
+			cp[len(iris)].Label = "gen"
+			cp[len(iris)].Index = len(iris)
+		}
 		others.Add("x", 4, len(cp))
 		x := others.ByName["x"]
 		for _, row := range iris {
 			x.X = append(x.X, row.Measures...)
 		}
-		{
+		if *FlagGen {
 			w := x
 			for i := range 4 {
 				w.X = append(w.X, rng.Float64()*average[i])
@@ -202,7 +217,7 @@ func main() {
 			l := tf64.Gradient(loss).X[0]
 			if math.IsNaN(float64(l)) || math.IsInf(float64(l), 0) {
 				fmt.Println(iteration, l)
-				return nil, nil
+				return nil
 			}
 
 			norm := 0.0
@@ -232,7 +247,7 @@ func main() {
 					w.X[ii] -= Eta * mhat / (math.Sqrt(vhat) + 1e-8)
 				}
 			}
-			{
+			if *FlagGen {
 				w := x
 				offset := len(iris) * 4
 				D := w.D[offset:]
@@ -253,54 +268,56 @@ func main() {
 			fmt.Println(l)
 		}
 
-		for iteration := range 2 * 1024 {
-			pow := func(x float64) float64 {
-				y := math.Pow(x, float64(iteration+1))
-				if math.IsNaN(y) || math.IsInf(y, 0) {
-					return 0
-				}
-				return y
-			}
-
-			set.Zero()
-			others.Zero()
-			l := tf64.Gradient(loss).X[0]
-			if math.IsNaN(float64(l)) || math.IsInf(float64(l), 0) {
-				fmt.Println(iteration, l)
-				return nil, nil
-			}
-
-			norm := 0.0
-			for _, p := range set.Weights {
-				for _, d := range p.D {
-					norm += d * d
-				}
-			}
-			norm = math.Sqrt(norm)
-			b1, b2 := pow(B1), pow(B2)
-			scaling := 1.0
-			if norm > 1 {
-				scaling = 1 / norm
-			}
-			{
-				w := x
-				offset := len(iris) * 4
-				D := w.D[offset:]
-				for ii, d := range D {
-					g := d * scaling
-					m := B1*w.States[StateM][offset+ii] + (1-B1)*g
-					v := B2*w.States[StateV][offset+ii] + (1-B2)*g*g
-					w.States[StateM][offset+ii] = m
-					w.States[StateV][offset+ii] = v
-					mhat := m / (1 - b1)
-					vhat := v / (1 - b2)
-					if vhat < 0 {
-						vhat = 0
+		if *FlagGen {
+			for iteration := range 2 * 1024 {
+				pow := func(x float64) float64 {
+					y := math.Pow(x, float64(iteration+1))
+					if math.IsNaN(y) || math.IsInf(y, 0) {
+						return 0
 					}
-					w.X[offset+ii] -= Eta * mhat / (math.Sqrt(vhat) + 1e-8)
+					return y
 				}
+
+				set.Zero()
+				others.Zero()
+				l := tf64.Gradient(loss).X[0]
+				if math.IsNaN(float64(l)) || math.IsInf(float64(l), 0) {
+					fmt.Println(iteration, l)
+					return nil
+				}
+
+				norm := 0.0
+				for _, p := range set.Weights {
+					for _, d := range p.D {
+						norm += d * d
+					}
+				}
+				norm = math.Sqrt(norm)
+				b1, b2 := pow(B1), pow(B2)
+				scaling := 1.0
+				if norm > 1 {
+					scaling = 1 / norm
+				}
+				{
+					w := x
+					offset := len(iris) * 4
+					D := w.D[offset:]
+					for ii, d := range D {
+						g := d * scaling
+						m := B1*w.States[StateM][offset+ii] + (1-B1)*g
+						v := B2*w.States[StateV][offset+ii] + (1-B2)*g*g
+						w.States[StateM][offset+ii] = m
+						w.States[StateV][offset+ii] = v
+						mhat := m / (1 - b1)
+						vhat := v / (1 - b2)
+						if vhat < 0 {
+							vhat = 0
+						}
+						w.X[offset+ii] -= Eta * mhat / (math.Sqrt(vhat) + 1e-8)
+					}
+				}
+				fmt.Println(l)
 			}
-			fmt.Println(l)
 		}
 
 		meta := make([][]float64, len(cp))
@@ -344,13 +361,17 @@ func main() {
 		for _, value := range x.X[len(iris)*4:] {
 			cp[len(iris)].Measures = append(cp[len(iris)].Measures, value)
 		}
+		I := set.ByName["i"]
+		for i := range cp {
+			cp[i].Embedding = I.X[i*width : (i+1)*width]
+		}
 		sort.Slice(cp, func(i, j int) bool {
 			return cp[i].Cluster < cp[j].Cluster
 		})
-		return set.ByName["i"], cp
+		return cp
 	}
 
-	I, cp := process(2)
+	cp := process(2)
 	acc := make(map[string][4]int)
 	for i := range cp {
 		fmt.Println(cp[i].Cluster, cp[i].Label)
@@ -359,7 +380,7 @@ func main() {
 		acc[cp[i].Label] = counts
 	}
 
-	_, cp5 := process(5)
+	cp5 := process(5)
 	acc5 := make(map[string][4]int)
 	for i := range cp5 {
 		fmt.Println(cp5[i].Cluster, cp5[i].Label)
@@ -368,9 +389,15 @@ func main() {
 		acc5[cp5[i].Label] = counts
 	}
 
+	indexes := make([]*Fisher, len(cp))
+	for i := range cp {
+		indexes[cp[i].Index] = &cp[i]
+	}
+
 	points := make([]plotter.XYs, 4)
 	for i := range len(cp5) {
-		points[cp5[i].Cluster] = append(points[cp5[i].Cluster], plotter.XY{X: I.X[i*2], Y: I.X[i*2+1]})
+		embedding := indexes[cp5[i].Index].Embedding
+		points[cp5[i].Cluster] = append(points[cp5[i].Cluster], plotter.XY{X: embedding[0], Y: embedding[1]})
 	}
 	p := plot.New()
 
@@ -409,14 +436,16 @@ func main() {
 	}
 
 	fmt.Println(average)
-	for _, value := range cp {
-		if value.Label == "gen" {
-			fmt.Println(value.Measures)
+	if *FlagGen {
+		for _, value := range cp {
+			if value.Label == "gen" {
+				fmt.Println(value.Measures)
+			}
 		}
-	}
-	for _, value := range cp5 {
-		if value.Label == "gen" {
-			fmt.Println(value.Measures)
+		for _, value := range cp5 {
+			if value.Label == "gen" {
+				fmt.Println(value.Measures)
+			}
 		}
 	}
 }
