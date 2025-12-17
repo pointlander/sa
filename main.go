@@ -124,6 +124,144 @@ func Load() []Fisher {
 	return fisher
 }
 
+// Stats are the statistics for a model
+type Stats struct {
+	Min float64
+	Max float64
+}
+
+// Network is a feedforward neural network
+type Network struct {
+	Rng    *rand.Rand
+	Width  int
+	Stats  []Stats
+	Set    tf64.Set
+	Others tf64.Set
+	L0     tf64.Meta
+	L1     tf64.Meta
+	Loss   tf64.Meta
+}
+
+// NewNetwork creates a network
+func NewNetwork(width int) Network {
+	rng := rand.New(rand.NewSource(1))
+	stats := make([]Stats, width)
+	for i := range stats {
+		stats[i].Min = math.MaxFloat64
+		stats[i].Max = -math.MaxFloat64
+	}
+	set := tf64.NewSet()
+	set.Add("w0", width, width)
+	set.Add("b0", width)
+	set.Add("w1", 2*width, 4)
+	set.Add("b1", 4, 1)
+	for i := range set.Weights {
+		w := set.Weights[i]
+		if strings.HasPrefix(w.N, "b") {
+			w.X = w.X[:cap(w.X)]
+			w.States = make([][]float64, StateTotal)
+			for ii := range w.States {
+				w.States[ii] = make([]float64, len(w.X))
+			}
+			continue
+		}
+		factor := math.Sqrt(2.0 / float64(w.S[0]))
+		for range cap(w.X) {
+			w.X = append(w.X, rng.NormFloat64()*factor)
+		}
+		w.States = make([][]float64, StateTotal)
+		for ii := range w.States {
+			w.States[ii] = make([]float64, len(w.X))
+		}
+	}
+
+	others := tf64.NewSet()
+	others.Add("input", width)
+	others.Add("output", 4)
+	input := others.ByName["input"].X
+	others.ByName["input"].X = input[:cap(input)]
+	output := others.ByName["output"].X
+	others.ByName["output"].X = output[:cap(output)]
+
+	l0 := tf64.Everett(tf64.Add(tf64.Mul(set.Get("w0"), others.Get("input")), set.Get("b0")))
+	l1 := tf64.Add(tf64.Mul(set.Get("w1"), l0), set.Get("b1"))
+	loss := tf64.Quadratic(others.Get("output"), l1)
+
+	return Network{
+		Rng:    rng,
+		Width:  width,
+		Stats:  stats,
+		Set:    set,
+		Others: others,
+		L0:     l0,
+		L1:     l1,
+		Loss:   loss,
+	}
+}
+
+// Learn learns with a network
+func (n *Network) Learn(data []Fisher) {
+	for i := range data {
+		for ii := range n.Stats {
+			value := data[i].Embedding[ii]
+			if value > n.Stats[ii].Max {
+				n.Stats[ii].Max = value
+			}
+			if value < n.Stats[ii].Min {
+				n.Stats[ii].Min = value
+			}
+		}
+	}
+	for iteration := range 2 * 1024 {
+		index := n.Rng.Intn(len(data))
+		copy(n.Others.ByName["input"].X, data[index].Embedding)
+		copy(n.Others.ByName["output"].X, data[index].Measures)
+		pow := func(x float64) float64 {
+			y := math.Pow(x, float64(iteration+1))
+			if math.IsNaN(y) || math.IsInf(y, 0) {
+				return 0
+			}
+			return y
+		}
+
+		n.Set.Zero()
+		n.Others.Zero()
+		l := tf64.Gradient(n.Loss).X[0]
+		if math.IsNaN(float64(l)) || math.IsInf(float64(l), 0) {
+			fmt.Println(iteration, l)
+		}
+
+		norm := 0.0
+		for _, p := range n.Set.Weights {
+			for _, d := range p.D {
+				norm += d * d
+			}
+		}
+		norm = math.Sqrt(norm)
+		b1, b2 := pow(B1), pow(B2)
+		scaling := 1.0
+		if norm > 1 {
+			scaling = 1 / norm
+		}
+		for _, w := range n.Set.Weights {
+			for ii, d := range w.D {
+				g := d * scaling
+				m := B1*w.States[StateM][ii] + (1-B1)*g
+				v := B2*w.States[StateV][ii] + (1-B2)*g*g
+				w.States[StateM][ii] = m
+				w.States[StateV][ii] = v
+				mhat := m / (1 - b1)
+				vhat := v / (1 - b2)
+				if vhat < 0 {
+					vhat = 0
+				}
+				w.X[ii] -= Eta * mhat / (math.Sqrt(vhat) + 1e-8)
+			}
+		}
+		fmt.Println(l)
+	}
+}
+
 var (
 	// FlagGen generation mode
 	FlagGen = flag.Bool("gen", false, "generation mode")
@@ -395,9 +533,16 @@ func main() {
 	}
 
 	points := make([]plotter.XYs, 4)
+	networks, sets := make([]Network, 3), make(map[int][]Fisher, 3)
+	for i := range networks {
+		networks[i] = NewNetwork(5)
+	}
 	for i := range len(cp5) {
 		embedding := indexes[cp5[i].Index].Embedding
 		points[cp5[i].Cluster] = append(points[cp5[i].Cluster], plotter.XY{X: embedding[0], Y: embedding[1]})
+		set := sets[cp5[i].Cluster]
+		set = append(set, cp5[i])
+		sets[cp5[i].Cluster] = set
 	}
 	p := plot.New()
 
@@ -427,6 +572,11 @@ func main() {
 		panic(err)
 	}
 
+	for i := range networks {
+		fmt.Println("--------------------------------------------------")
+		networks[i].Learn(sets[i])
+	}
+
 	for i, v := range acc {
 		fmt.Println(i, v)
 	}
@@ -448,4 +598,14 @@ func main() {
 			}
 		}
 	}
+
+	inputs := make([]float64, 5)
+	for i := range inputs {
+		inputs[i] = (networks[0].Stats[i].Max-networks[0].Stats[i].Min)*networks[0].Rng.Float64() + networks[0].Stats[i].Min
+	}
+	copy(networks[0].Others.ByName["input"].X, inputs)
+	networks[0].L1(func(a *tf64.V) bool {
+		fmt.Println(a.X)
+		return true
+	})
 }
