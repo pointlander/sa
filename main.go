@@ -124,6 +124,236 @@ func Load() []Fisher {
 	return fisher
 }
 
+// LearnEmbedding learns the embedding
+func LearnEmbedding(iris []Fisher, average []float64, width int) []Fisher {
+	rng := rand.New(rand.NewSource(1))
+	others := tf64.NewSet()
+	length := len(iris)
+	if *FlagGen {
+		length++
+	}
+	cp := make([]Fisher, length)
+	copy(cp, iris)
+	if *FlagGen {
+		cp[len(iris)].Label = "gen"
+		cp[len(iris)].Index = len(iris)
+	}
+	others.Add("x", 4, len(cp))
+	x := others.ByName["x"]
+	for _, row := range iris {
+		x.X = append(x.X, row.Measures...)
+	}
+	if *FlagGen {
+		w := x
+		for i := range 4 {
+			w.X = append(w.X, rng.Float64()*average[i])
+		}
+		w.States = make([][]float64, StateTotal)
+		for ii := range w.States {
+			w.States[ii] = make([]float64, len(w.X))
+		}
+	}
+
+	set := tf64.NewSet()
+	set.Add("i", width, len(cp))
+
+	for ii := range set.Weights {
+		w := set.Weights[ii]
+		if strings.HasPrefix(w.N, "b") {
+			w.X = w.X[:cap(w.X)]
+			w.States = make([][]float64, StateTotal)
+			for ii := range w.States {
+				w.States[ii] = make([]float64, len(w.X))
+			}
+			continue
+		}
+		factor := math.Sqrt(2.0 / float64(w.S[0]))
+		for range cap(w.X) {
+			w.X = append(w.X, rng.NormFloat64()*factor*.01)
+		}
+		w.States = make([][]float64, StateTotal)
+		for ii := range w.States {
+			w.States[ii] = make([]float64, len(w.X))
+		}
+	}
+
+	drop := .3
+	dropout := map[string]interface{}{
+		"rng":  rng,
+		"drop": &drop,
+	}
+
+	sa := tf64.T(tf64.Mul(tf64.Dropout(tf64.MulS(set.Get("i"), set.Get("i")), dropout), tf64.T(others.Get("x"))))
+	loss := tf64.Avg(tf64.Quadratic(others.Get("x"), sa))
+
+	for iteration := range 2 * 1024 {
+		pow := func(x float64) float64 {
+			y := math.Pow(x, float64(iteration+1))
+			if math.IsNaN(y) || math.IsInf(y, 0) {
+				return 0
+			}
+			return y
+		}
+
+		set.Zero()
+		others.Zero()
+		l := tf64.Gradient(loss).X[0]
+		if math.IsNaN(float64(l)) || math.IsInf(float64(l), 0) {
+			fmt.Println(iteration, l)
+			return nil
+		}
+
+		norm := 0.0
+		for _, p := range set.Weights {
+			for _, d := range p.D {
+				norm += d * d
+			}
+		}
+		norm = math.Sqrt(norm)
+		b1, b2 := pow(B1), pow(B2)
+		scaling := 1.0
+		if norm > 1 {
+			scaling = 1 / norm
+		}
+		for _, w := range set.Weights {
+			for ii, d := range w.D {
+				g := d * scaling
+				m := B1*w.States[StateM][ii] + (1-B1)*g
+				v := B2*w.States[StateV][ii] + (1-B2)*g*g
+				w.States[StateM][ii] = m
+				w.States[StateV][ii] = v
+				mhat := m / (1 - b1)
+				vhat := v / (1 - b2)
+				if vhat < 0 {
+					vhat = 0
+				}
+				w.X[ii] -= Eta * mhat / (math.Sqrt(vhat) + 1e-8)
+			}
+		}
+		if *FlagGen {
+			w := x
+			offset := len(iris) * 4
+			D := w.D[offset:]
+			for ii, d := range D {
+				g := d * scaling
+				m := B1*w.States[StateM][offset+ii] + (1-B1)*g
+				v := B2*w.States[StateV][offset+ii] + (1-B2)*g*g
+				w.States[StateM][offset+ii] = m
+				w.States[StateV][offset+ii] = v
+				mhat := m / (1 - b1)
+				vhat := v / (1 - b2)
+				if vhat < 0 {
+					vhat = 0
+				}
+				w.X[offset+ii] -= Eta * mhat / (math.Sqrt(vhat) + 1e-8)
+			}
+		}
+		fmt.Println(l)
+	}
+
+	if *FlagGen {
+		for iteration := range 2 * 1024 {
+			pow := func(x float64) float64 {
+				y := math.Pow(x, float64(iteration+1))
+				if math.IsNaN(y) || math.IsInf(y, 0) {
+					return 0
+				}
+				return y
+			}
+
+			set.Zero()
+			others.Zero()
+			l := tf64.Gradient(loss).X[0]
+			if math.IsNaN(float64(l)) || math.IsInf(float64(l), 0) {
+				fmt.Println(iteration, l)
+				return nil
+			}
+
+			norm := 0.0
+			for _, p := range set.Weights {
+				for _, d := range p.D {
+					norm += d * d
+				}
+			}
+			norm = math.Sqrt(norm)
+			b1, b2 := pow(B1), pow(B2)
+			scaling := 1.0
+			if norm > 1 {
+				scaling = 1 / norm
+			}
+			{
+				w := x
+				offset := len(iris) * 4
+				D := w.D[offset:]
+				for ii, d := range D {
+					g := d * scaling
+					m := B1*w.States[StateM][offset+ii] + (1-B1)*g
+					v := B2*w.States[StateV][offset+ii] + (1-B2)*g*g
+					w.States[StateM][offset+ii] = m
+					w.States[StateV][offset+ii] = v
+					mhat := m / (1 - b1)
+					vhat := v / (1 - b2)
+					if vhat < 0 {
+						vhat = 0
+					}
+					w.X[offset+ii] -= Eta * mhat / (math.Sqrt(vhat) + 1e-8)
+				}
+			}
+			fmt.Println(l)
+		}
+	}
+
+	meta := make([][]float64, len(cp))
+	for i := range meta {
+		meta[i] = make([]float64, len(cp))
+	}
+	const k = 3
+
+	{
+		y := set.ByName["i"]
+		vectors := make([][]float64, len(cp))
+		for i := range vectors {
+			row := make([]float64, width)
+			for ii := range row {
+				row[ii] = y.X[i*width+ii]
+			}
+			vectors[i] = row
+		}
+		for i := 0; i < 33; i++ {
+			clusters, _, err := kmeans.Kmeans(int64(i+1), vectors, k, kmeans.SquaredEuclideanDistance, -1)
+			if err != nil {
+				panic(err)
+			}
+			for i := 0; i < len(meta); i++ {
+				target := clusters[i]
+				for j, v := range clusters {
+					if v == target {
+						meta[i][j]++
+					}
+				}
+			}
+		}
+	}
+	clusters, _, err := kmeans.Kmeans(1, meta, 3, kmeans.SquaredEuclideanDistance, -1)
+	if err != nil {
+		panic(err)
+	}
+	for i := range clusters {
+		cp[i].Cluster = clusters[i]
+	}
+	for _, value := range x.X[len(iris)*4:] {
+		cp[len(iris)].Measures = append(cp[len(iris)].Measures, value)
+	}
+	I := set.ByName["i"]
+	for i := range cp {
+		cp[i].Embedding = I.X[i*width : (i+1)*width]
+	}
+	sort.Slice(cp, func(i, j int) bool {
+		return cp[i].Cluster < cp[j].Cluster
+	})
+	return cp
+}
+
 // Stats are the statistics for a model
 type Stats struct {
 	Min float64
@@ -280,236 +510,8 @@ func main() {
 	for i, value := range average {
 		average[i] = value / float64(len(iris))
 	}
-	process := func(width int) []Fisher {
-		rng := rand.New(rand.NewSource(1))
-		others := tf64.NewSet()
-		length := len(iris)
-		if *FlagGen {
-			length++
-		}
-		cp := make([]Fisher, length)
-		copy(cp, iris)
-		if *FlagGen {
-			cp[len(iris)].Label = "gen"
-			cp[len(iris)].Index = len(iris)
-		}
-		others.Add("x", 4, len(cp))
-		x := others.ByName["x"]
-		for _, row := range iris {
-			x.X = append(x.X, row.Measures...)
-		}
-		if *FlagGen {
-			w := x
-			for i := range 4 {
-				w.X = append(w.X, rng.Float64()*average[i])
-			}
-			w.States = make([][]float64, StateTotal)
-			for ii := range w.States {
-				w.States[ii] = make([]float64, len(w.X))
-			}
-		}
 
-		set := tf64.NewSet()
-		set.Add("i", width, len(cp))
-
-		for ii := range set.Weights {
-			w := set.Weights[ii]
-			if strings.HasPrefix(w.N, "b") {
-				w.X = w.X[:cap(w.X)]
-				w.States = make([][]float64, StateTotal)
-				for ii := range w.States {
-					w.States[ii] = make([]float64, len(w.X))
-				}
-				continue
-			}
-			factor := math.Sqrt(2.0 / float64(w.S[0]))
-			for range cap(w.X) {
-				w.X = append(w.X, rng.NormFloat64()*factor*.01)
-			}
-			w.States = make([][]float64, StateTotal)
-			for ii := range w.States {
-				w.States[ii] = make([]float64, len(w.X))
-			}
-		}
-
-		drop := .3
-		dropout := map[string]interface{}{
-			"rng":  rng,
-			"drop": &drop,
-		}
-
-		sa := tf64.T(tf64.Mul(tf64.Dropout(tf64.MulS(set.Get("i"), set.Get("i")), dropout), tf64.T(others.Get("x"))))
-		loss := tf64.Avg(tf64.Quadratic(others.Get("x"), sa))
-
-		for iteration := range 2 * 1024 {
-			pow := func(x float64) float64 {
-				y := math.Pow(x, float64(iteration+1))
-				if math.IsNaN(y) || math.IsInf(y, 0) {
-					return 0
-				}
-				return y
-			}
-
-			set.Zero()
-			others.Zero()
-			l := tf64.Gradient(loss).X[0]
-			if math.IsNaN(float64(l)) || math.IsInf(float64(l), 0) {
-				fmt.Println(iteration, l)
-				return nil
-			}
-
-			norm := 0.0
-			for _, p := range set.Weights {
-				for _, d := range p.D {
-					norm += d * d
-				}
-			}
-			norm = math.Sqrt(norm)
-			b1, b2 := pow(B1), pow(B2)
-			scaling := 1.0
-			if norm > 1 {
-				scaling = 1 / norm
-			}
-			for _, w := range set.Weights {
-				for ii, d := range w.D {
-					g := d * scaling
-					m := B1*w.States[StateM][ii] + (1-B1)*g
-					v := B2*w.States[StateV][ii] + (1-B2)*g*g
-					w.States[StateM][ii] = m
-					w.States[StateV][ii] = v
-					mhat := m / (1 - b1)
-					vhat := v / (1 - b2)
-					if vhat < 0 {
-						vhat = 0
-					}
-					w.X[ii] -= Eta * mhat / (math.Sqrt(vhat) + 1e-8)
-				}
-			}
-			if *FlagGen {
-				w := x
-				offset := len(iris) * 4
-				D := w.D[offset:]
-				for ii, d := range D {
-					g := d * scaling
-					m := B1*w.States[StateM][offset+ii] + (1-B1)*g
-					v := B2*w.States[StateV][offset+ii] + (1-B2)*g*g
-					w.States[StateM][offset+ii] = m
-					w.States[StateV][offset+ii] = v
-					mhat := m / (1 - b1)
-					vhat := v / (1 - b2)
-					if vhat < 0 {
-						vhat = 0
-					}
-					w.X[offset+ii] -= Eta * mhat / (math.Sqrt(vhat) + 1e-8)
-				}
-			}
-			fmt.Println(l)
-		}
-
-		if *FlagGen {
-			for iteration := range 2 * 1024 {
-				pow := func(x float64) float64 {
-					y := math.Pow(x, float64(iteration+1))
-					if math.IsNaN(y) || math.IsInf(y, 0) {
-						return 0
-					}
-					return y
-				}
-
-				set.Zero()
-				others.Zero()
-				l := tf64.Gradient(loss).X[0]
-				if math.IsNaN(float64(l)) || math.IsInf(float64(l), 0) {
-					fmt.Println(iteration, l)
-					return nil
-				}
-
-				norm := 0.0
-				for _, p := range set.Weights {
-					for _, d := range p.D {
-						norm += d * d
-					}
-				}
-				norm = math.Sqrt(norm)
-				b1, b2 := pow(B1), pow(B2)
-				scaling := 1.0
-				if norm > 1 {
-					scaling = 1 / norm
-				}
-				{
-					w := x
-					offset := len(iris) * 4
-					D := w.D[offset:]
-					for ii, d := range D {
-						g := d * scaling
-						m := B1*w.States[StateM][offset+ii] + (1-B1)*g
-						v := B2*w.States[StateV][offset+ii] + (1-B2)*g*g
-						w.States[StateM][offset+ii] = m
-						w.States[StateV][offset+ii] = v
-						mhat := m / (1 - b1)
-						vhat := v / (1 - b2)
-						if vhat < 0 {
-							vhat = 0
-						}
-						w.X[offset+ii] -= Eta * mhat / (math.Sqrt(vhat) + 1e-8)
-					}
-				}
-				fmt.Println(l)
-			}
-		}
-
-		meta := make([][]float64, len(cp))
-		for i := range meta {
-			meta[i] = make([]float64, len(cp))
-		}
-		const k = 3
-
-		{
-			y := set.ByName["i"]
-			vectors := make([][]float64, len(cp))
-			for i := range vectors {
-				row := make([]float64, width)
-				for ii := range row {
-					row[ii] = y.X[i*width+ii]
-				}
-				vectors[i] = row
-			}
-			for i := 0; i < 33; i++ {
-				clusters, _, err := kmeans.Kmeans(int64(i+1), vectors, k, kmeans.SquaredEuclideanDistance, -1)
-				if err != nil {
-					panic(err)
-				}
-				for i := 0; i < len(meta); i++ {
-					target := clusters[i]
-					for j, v := range clusters {
-						if v == target {
-							meta[i][j]++
-						}
-					}
-				}
-			}
-		}
-		clusters, _, err := kmeans.Kmeans(1, meta, 3, kmeans.SquaredEuclideanDistance, -1)
-		if err != nil {
-			panic(err)
-		}
-		for i := range clusters {
-			cp[i].Cluster = clusters[i]
-		}
-		for _, value := range x.X[len(iris)*4:] {
-			cp[len(iris)].Measures = append(cp[len(iris)].Measures, value)
-		}
-		I := set.ByName["i"]
-		for i := range cp {
-			cp[i].Embedding = I.X[i*width : (i+1)*width]
-		}
-		sort.Slice(cp, func(i, j int) bool {
-			return cp[i].Cluster < cp[j].Cluster
-		})
-		return cp
-	}
-
-	cp := process(2)
+	cp := LearnEmbedding(iris, average, 2)
 	acc := make(map[string][4]int)
 	for i := range cp {
 		fmt.Println(cp[i].Cluster, cp[i].Label)
@@ -518,7 +520,7 @@ func main() {
 		acc[cp[i].Label] = counts
 	}
 
-	cp5 := process(5)
+	cp5 := LearnEmbedding(iris, average, 5)
 	acc5 := make(map[string][4]int)
 	for i := range cp5 {
 		fmt.Println(cp5[i].Cluster, cp5[i].Label)
