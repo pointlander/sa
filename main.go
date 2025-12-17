@@ -7,6 +7,7 @@ package main
 import (
 	"archive/zip"
 	"bytes"
+	"compress/bzip2"
 	"embed"
 	"encoding/csv"
 	"flag"
@@ -122,6 +123,46 @@ func Load() []Fisher {
 		}
 	}
 	return fisher
+}
+
+//go:embed books/*
+var Books embed.FS
+
+// Book is a book
+type Book struct {
+	Name string
+	Text []byte
+}
+
+// LoadBooks loads books
+func LoadBooks() []Book {
+	books := []Book{
+		{Name: "pg74.txt.bz2"},
+		{Name: "10.txt.utf-8.bz2"},
+		{Name: "76.txt.utf-8.bz2"},
+		{Name: "84.txt.utf-8.bz2"},
+		{Name: "100.txt.utf-8.bz2"},
+		{Name: "1837.txt.utf-8.bz2"},
+		{Name: "2701.txt.utf-8.bz2"},
+		{Name: "3176.txt.utf-8.bz2"},
+	}
+	load := func(book string) []byte {
+		file, err := Books.Open(book)
+		if err != nil {
+			panic(err)
+		}
+		defer file.Close()
+		breader := bzip2.NewReader(file)
+		data, err := io.ReadAll(breader)
+		if err != nil {
+			panic(err)
+		}
+		return data
+	}
+	for i := range books {
+		books[i].Text = load(fmt.Sprintf("books/%s", books[i].Name))
+	}
+	return books
 }
 
 // LearnEmbedding learns the embedding
@@ -495,10 +536,18 @@ func (n *Network) Learn(data []Fisher) {
 var (
 	// FlagGen generation mode
 	FlagGen = flag.Bool("gen", false, "generation mode")
+	// FlagBook book mode
+	FlagBook = flag.Bool("book", false, "book mode")
 )
 
 func main() {
 	flag.Parse()
+
+	if *FlagBook {
+		books := LoadBooks()
+		_ = books
+		return
+	}
 
 	iris := Load()
 	average := make([]float64, 4)
