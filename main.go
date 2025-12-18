@@ -55,6 +55,7 @@ type Fisher struct {
 	Measures  []float64
 	Embedding []float64
 	Label     string
+	L         byte
 	Cluster   int
 	Index     int
 }
@@ -166,7 +167,7 @@ func LoadBooks() []Book {
 }
 
 // LearnEmbedding learns the embedding
-func LearnEmbedding(iris []Fisher, average []float64, width int) []Fisher {
+func LearnEmbedding(iris []Fisher, average []float64, size, width int) []Fisher {
 	rng := rand.New(rand.NewSource(1))
 	others := tf64.NewSet()
 	length := len(iris)
@@ -179,14 +180,14 @@ func LearnEmbedding(iris []Fisher, average []float64, width int) []Fisher {
 		cp[len(iris)].Label = "gen"
 		cp[len(iris)].Index = len(iris)
 	}
-	others.Add("x", 4, len(cp))
+	others.Add("x", size, len(cp))
 	x := others.ByName["x"]
 	for _, row := range iris {
 		x.X = append(x.X, row.Measures...)
 	}
 	if *FlagGen {
 		w := x
-		for i := range 4 {
+		for i := range size {
 			w.X = append(w.X, rng.Float64()*average[i])
 		}
 		w.States = make([][]float64, StateTotal)
@@ -273,7 +274,7 @@ func LearnEmbedding(iris []Fisher, average []float64, width int) []Fisher {
 		}
 		if *FlagGen {
 			w := x
-			offset := len(iris) * 4
+			offset := len(iris) * size
 			D := w.D[offset:]
 			for ii, d := range D {
 				g := d * scaling
@@ -324,7 +325,7 @@ func LearnEmbedding(iris []Fisher, average []float64, width int) []Fisher {
 			}
 			{
 				w := x
-				offset := len(iris) * 4
+				offset := len(iris) * size
 				D := w.D[offset:]
 				for ii, d := range D {
 					g := d * scaling
@@ -382,7 +383,7 @@ func LearnEmbedding(iris []Fisher, average []float64, width int) []Fisher {
 	for i := range clusters {
 		cp[i].Cluster = clusters[i]
 	}
-	for _, value := range x.X[len(iris)*4:] {
+	for _, value := range x.X[len(iris)*size:] {
 		cp[len(iris)].Measures = append(cp[len(iris)].Measures, value)
 	}
 	I := set.ByName["i"]
@@ -545,7 +546,48 @@ func main() {
 
 	if *FlagBook {
 		books := LoadBooks()
-		_ = books
+		book := make([]Fisher, 0, 8)
+		offset := 3 * 1024
+		input := []byte{}
+		for i, symbol := range books[1].Text[offset : offset+300] {
+			b := Fisher{
+				Measures: make([]float64, 256),
+				L:        symbol,
+				Index:    i,
+			}
+			b.Measures[symbol] = 1
+			input = append(input, symbol)
+			book = append(book, b)
+		}
+		fmt.Println(string(input))
+		cp := LearnEmbedding(book, nil, 256, 2)
+
+		points := make(plotter.XYs, 0, 8)
+		for _, point := range cp {
+			embedding := point.Embedding
+			points = append(points, plotter.XY{X: embedding[0], Y: embedding[1]})
+			fmt.Println(embedding[0], embedding[1])
+		}
+
+		p := plot.New()
+
+		p.Title.Text = "x vs y"
+		p.X.Label.Text = "x"
+		p.Y.Label.Text = "y"
+
+		scatter, err := plotter.NewScatter(points)
+		if err != nil {
+			panic(err)
+		}
+		scatter.GlyphStyle.Radius = vg.Length(1)
+		scatter.GlyphStyle.Shape = draw.CircleGlyph{}
+		p.Add(scatter)
+
+		err = p.Save(8*vg.Inch, 8*vg.Inch, "clusters_text.png")
+		if err != nil {
+			panic(err)
+		}
+
 		return
 	}
 
@@ -560,7 +602,7 @@ func main() {
 		average[i] = value / float64(len(iris))
 	}
 
-	cp := LearnEmbedding(iris, average, 2)
+	cp := LearnEmbedding(iris, average, 4, 2)
 	acc := make(map[string][4]int)
 	for i := range cp {
 		fmt.Println(cp[i].Cluster, cp[i].Label)
@@ -569,7 +611,7 @@ func main() {
 		acc[cp[i].Label] = counts
 	}
 
-	cp5 := LearnEmbedding(iris, average, 5)
+	cp5 := LearnEmbedding(iris, average, 4, 5)
 	acc5 := make(map[string][4]int)
 	for i := range cp5 {
 		fmt.Println(cp5[i].Cluster, cp5[i].Label)
