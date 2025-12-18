@@ -431,7 +431,7 @@ func LearnEmbeddingAlpha(iris []Fisher, size, width int) []Fisher {
 		}
 		factor := math.Sqrt(2.0 / float64(w.S[0]))
 		for range cap(w.X) {
-			w.X = append(w.X, rng.NormFloat64()*factor*.01)
+			w.X = append(w.X, rng.NormFloat64()*factor)
 		}
 		w.States = make([][]float64, StateTotal)
 		for ii := range w.States {
@@ -450,7 +450,7 @@ func LearnEmbeddingAlpha(iris []Fisher, size, width int) []Fisher {
 	sa := tf64.T(tf64.Mul(tf64.Dropout(tf64.MulS(set.Get("i"), set.Get("i")), dropout), tf64.T(l1)))
 	loss := tf64.Avg(tf64.Quadratic(l1, sa))
 
-	for iteration := range 160 {
+	for iteration := range 512 {
 		pow := func(x float64) float64 {
 			y := math.Pow(x, float64(iteration+1))
 			if math.IsNaN(y) || math.IsInf(y, 0) {
