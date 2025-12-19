@@ -225,7 +225,7 @@ func LearnEmbedding(iris []Fisher, average []float64, size, width int) []Fisher 
 		"drop": &drop,
 	}
 
-	sa := tf64.T(tf64.Mul(tf64.Dropout(tf64.MulS(set.Get("i"), set.Get("i")), dropout), tf64.T(others.Get("x"))))
+	sa := tf64.T(tf64.Mul(tf64.Dropout(tf64.Square(set.Get("i")), dropout), tf64.T(others.Get("x"))))
 	loss := tf64.Avg(tf64.Quadratic(others.Get("x"), sa))
 
 	for iteration := range 2 * 1024 {
@@ -447,7 +447,7 @@ func LearnEmbeddingAlpha(iris []Fisher, size, width int) []Fisher {
 
 	l0 := tf64.Everett(tf64.Add(tf64.Mul(set.Get("w0"), others.Get("x")), set.Get("b0")))
 	l1 := tf64.Add(tf64.Mul(set.Get("w1"), l0), set.Get("b1"))
-	sa := tf64.T(tf64.Mul(tf64.Dropout(tf64.MulS(set.Get("i"), set.Get("i")), dropout), tf64.T(l1)))
+	sa := tf64.T(tf64.Mul(tf64.Dropout(tf64.Square(set.Get("i")), dropout), tf64.T(l1)))
 	loss := tf64.Avg(tf64.Quadratic(l1, sa))
 
 	for iteration := range 512 {
