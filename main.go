@@ -695,13 +695,13 @@ func main() {
 
 	if *FlagBook {
 		const (
-			Eta = 1.0e-2
+			Eta = 1.0e-3
 		)
 		books := LoadBooks()
 		book := make([]Fisher, 0, 8)
 		offset := 3 * 1024
 		input := []byte{}
-		for i, symbol := range books[1].Text[offset : offset+300] {
+		for i, symbol := range books[1].Text[offset : offset+150] {
 			b := Fisher{
 				Measures: make([]float64, 256),
 				L:        symbol,
@@ -759,9 +759,9 @@ func main() {
 		init.X = init.X[:cap(init.X)]
 
 		set := tf64.NewSet()
-		set.Add("w0", 10, 20)
-		set.Add("b0", 20)
-		set.Add("w1", 40, 8+256)
+		set.Add("w0", 10, 80)
+		set.Add("b0", 80)
+		set.Add("w1", 160, 8+256)
 		set.Add("b1", 8+256)
 		for i := range set.Weights {
 			w := set.Weights[i]
