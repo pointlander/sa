@@ -694,6 +694,9 @@ func main() {
 	flag.Parse()
 
 	if *FlagBook {
+		const (
+			Eta = 1.0e-2
+		)
 		books := LoadBooks()
 		book := make([]Fisher, 0, 8)
 		offset := 3 * 1024
@@ -735,6 +738,119 @@ func main() {
 		err = p.Save(8*vg.Inch, 8*vg.Inch, "clusters_text.png")
 		if err != nil {
 			panic(err)
+		}
+
+		rng := rand.New(rand.NewSource(1))
+
+		others := make([]tf64.Set, len(book))
+		for i := range book {
+			others[i] = tf64.NewSet()
+			others[i].Add("input", 2)
+			others[i].Add("output", 256)
+			input := others[i].ByName["input"]
+			input.X = append(input.X, book[i].Embedding...)
+			output := others[i].ByName["output"]
+			output.X = append(output.X, book[i].Measures...)
+		}
+
+		initial := tf64.NewSet()
+		initial.Add("initial", 8)
+		init := initial.ByName["initial"]
+		init.X = init.X[:cap(init.X)]
+
+		set := tf64.NewSet()
+		set.Add("w0", 10, 20)
+		set.Add("b0", 20)
+		set.Add("w1", 40, 8+256)
+		set.Add("b1", 8+256)
+		for i := range set.Weights {
+			w := set.Weights[i]
+			if strings.HasPrefix(w.N, "b") {
+				w.X = w.X[:cap(w.X)]
+				w.States = make([][]float64, StateTotal)
+				for ii := range w.States {
+					w.States[ii] = make([]float64, len(w.X))
+				}
+				continue
+			}
+			factor := math.Sqrt(2.0 / float64(w.S[0]))
+			for range cap(w.X) {
+				w.X = append(w.X, rng.NormFloat64()*factor)
+			}
+			w.States = make([][]float64, StateTotal)
+			for ii := range w.States {
+				w.States[ii] = make([]float64, len(w.X))
+			}
+		}
+
+		l0 := tf64.Everett(tf64.Add(tf64.Mul(set.Get("w0"), tf64.Concat(others[0].Get("input"), initial.Get("initial"))), set.Get("b0")))
+		l1 := tf64.Add(tf64.Mul(set.Get("w1"), l0), set.Get("b1"))
+		begin, end := 8, 8+256
+		options := map[string]interface{}{
+			"begin": &begin,
+			"end":   &end,
+		}
+		loss := tf64.Quadratic(others[0].Get("output"), tf64.Slice(l1, options))
+
+		begin2, end2 := 0, 8
+		options2 := map[string]interface{}{
+			"begin": &begin2,
+			"end":   &end2,
+		}
+		for i := range book[1:] {
+			l0 = tf64.Everett(tf64.Add(tf64.Mul(set.Get("w0"), tf64.Concat(others[i+1].Get("input"), tf64.Slice(l1, options2))), set.Get("b0")))
+			l1 = tf64.Add(tf64.Mul(set.Get("w1"), l0), set.Get("b1"))
+			loss = tf64.Add(tf64.Quadratic(others[i+1].Get("output"), tf64.Slice(l1, options)), loss)
+		}
+
+		for iteration := range 512 {
+			pow := func(x float64) float64 {
+				y := math.Pow(x, float64(iteration+1))
+				if math.IsNaN(y) || math.IsInf(y, 0) {
+					return 0
+				}
+				return y
+			}
+
+			set.Zero()
+			initial.Zero()
+			for i := range others {
+				others[i].Zero()
+			}
+			l := tf64.Gradient(loss).X[0]
+			if math.IsNaN(float64(l)) || math.IsInf(float64(l), 0) {
+				fmt.Println(iteration, l)
+				return
+			}
+
+			norm := 0.0
+			for _, p := range set.Weights {
+				for _, d := range p.D {
+					norm += d * d
+				}
+			}
+			norm = math.Sqrt(norm)
+			b1, b2 := pow(B1), pow(B2)
+			scaling := 1.0
+			if norm > 1 {
+				scaling = 1 / norm
+			}
+			for _, w := range set.Weights {
+				for ii, d := range w.D {
+					g := d * scaling
+					m := B1*w.States[StateM][ii] + (1-B1)*g
+					v := B2*w.States[StateV][ii] + (1-B2)*g*g
+					w.States[StateM][ii] = m
+					w.States[StateV][ii] = v
+					mhat := m / (1 - b1)
+					vhat := v / (1 - b2)
+					if vhat < 0 {
+						vhat = 0
+					}
+					w.X[ii] -= Eta * mhat / (math.Sqrt(vhat) + 1e-8)
+				}
+			}
+			fmt.Println(iteration, l)
 		}
 
 		return
