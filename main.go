@@ -688,6 +688,8 @@ var (
 	FlagGen = flag.Bool("gen", false, "generation mode")
 	// FlagBook book mode
 	FlagBook = flag.Bool("book", false, "book mode")
+	// FlagPlot plots the embeddings
+	FlagPlot = flag.Bool("plot", false, "plot the embeddings")
 )
 
 func main() {
@@ -712,35 +714,41 @@ func main() {
 			book = append(book, b)
 		}
 		fmt.Println(string(input))
-		cp := LearnEmbeddingAlpha(book, 256, 2)
+		width := 5
+		if *FlagPlot {
+			width = 2
+		}
+		cp := LearnEmbeddingAlpha(book, 256, width)
 
-		points := make(plotter.XYs, 0, 8)
-		for _, point := range cp {
-			embedding := point.Embedding
-			points = append(points, plotter.XY{X: embedding[0], Y: embedding[1]})
-			fmt.Println(embedding[0], embedding[1])
+		if *FlagPlot {
+			points := make(plotter.XYs, 0, 8)
+			for _, point := range cp {
+				embedding := point.Embedding
+				points = append(points, plotter.XY{X: embedding[0], Y: embedding[1]})
+				fmt.Println(embedding[0], embedding[1])
+			}
+
+			p := plot.New()
+
+			p.Title.Text = "x vs y"
+			p.X.Label.Text = "x"
+			p.Y.Label.Text = "y"
+
+			scatter, err := plotter.NewScatter(points)
+			if err != nil {
+				panic(err)
+			}
+			scatter.GlyphStyle.Radius = vg.Length(1)
+			scatter.GlyphStyle.Shape = draw.CircleGlyph{}
+			p.Add(scatter)
+
+			err = p.Save(8*vg.Inch, 8*vg.Inch, "clusters_text.png")
+			if err != nil {
+				panic(err)
+			}
 		}
 
-		p := plot.New()
-
-		p.Title.Text = "x vs y"
-		p.X.Label.Text = "x"
-		p.Y.Label.Text = "y"
-
-		scatter, err := plotter.NewScatter(points)
-		if err != nil {
-			panic(err)
-		}
-		scatter.GlyphStyle.Radius = vg.Length(1)
-		scatter.GlyphStyle.Shape = draw.CircleGlyph{}
-		p.Add(scatter)
-
-		err = p.Save(8*vg.Inch, 8*vg.Inch, "clusters_text.png")
-		if err != nil {
-			panic(err)
-		}
-
-		rng := rand.New(rand.NewSource(1))
+		/*rng := rand.New(rand.NewSource(1))
 
 		others := make([]tf64.Set, len(book))
 		for i := range book {
@@ -851,7 +859,7 @@ func main() {
 				}
 			}
 			fmt.Println(iteration, l)
-		}
+		}*/
 
 		return
 	}
