@@ -754,7 +754,7 @@ func main() {
 		book := make([]Fisher, 0, 8)
 		offset := 3 * 1024
 		input := []byte{}
-		for i, symbol := range books[1].Text[offset : offset+1024] {
+		for i, symbol := range books[1].Text[offset : offset+2*1024] {
 			b := Fisher{
 				Measures: make([]float64, 256),
 				L:        symbol,
@@ -828,78 +828,52 @@ func main() {
 			model.Set(markov, entry)
 			markov.Iterate(entry.L)
 		}
-		symbols := make([]byte, 0, 33)
-		current := cp[len(cp)-1].Embedding
-		for range 33 {
-			bucket := model.Get(markov)
-			d := make([]float64, len(bucket.Entries))
-			sum := 0.0
-			for i, entry := range bucket.Entries {
-				x := cs(current, entry.Embedding)
-				d[i] = x
-				sum += x
-			}
-			total, selected, index := 0.0, rng.Float64(), 0
-			for i, value := range d {
-				total += value / sum
-				if selected < total {
-					index = i
-					break
-				}
-			}
-			symbol := bucket.Entries[index].L
-			symbols = append(symbols, symbol)
-			current = bucket.Entries[index].Embedding
-			markov.Iterate(symbol)
+		type Result struct {
+			Symbols []byte
+			Cost    float64
 		}
-		fmt.Println("`" + string(input) + "`")
-		fmt.Println("`" + string(symbols) + "`")
-
-		/*search := func() ([]byte, float64) {
-			result, cost := []byte{}, 0.0
-			current := cp[len(cp)-1]
+		process := func(markov Markov) Result {
+			symbols := make([]byte, 0, 33)
+			current := cp[len(cp)-1].Embedding
+			cost := 0.0
 			for range 33 {
-				d := make([]float64, len(cp))
-				for i := range cp {
-					d[i] = cs(current.Embedding, cp[i].Embedding)
-				}
+				bucket := model.Get(markov)
+				d := make([]float64, len(bucket.Entries))
 				sum := 0.0
-				for _, value := range d {
-					sum += value
+				for i, entry := range bucket.Entries {
+					x := cs(current, entry.Embedding)
+					d[i] = x
+					sum += x
 				}
 				total, selected, index := 0.0, rng.Float64(), 0
-				for i := range d {
-					total += d[i] / sum
+				for i, value := range d {
+					total += value / sum
 					if selected < total {
 						index = i
 						break
 					}
 				}
-				for i, value := range cp[index].Embedding {
-					current.Embedding[i] += value
-				}
-				result = append(result, cp[index].L)
+				symbol := bucket.Entries[index].L
+				symbols = append(symbols, symbol)
 				cost += d[index] / sum
+				current = bucket.Entries[index].Embedding
+				markov.Iterate(symbol)
 			}
-			return result, cost
-		}
-		fmt.Println("`" + string(input) + "`")
-		type Result struct {
-			Symbols []byte
-			Cost    float64
-		}
-		results := make([]Result, 0, 8)
-		for range 8 * 1024 {
-			symbols, cost := search()
-			results = append(results, Result{
+			return Result{
 				Symbols: symbols,
 				Cost:    cost,
-			})
+			}
+		}
+		results := make([]Result, 0, 256*1024)
+		for range 256 * 1024 {
+			result := process(markov)
+			results = append(results, result)
 		}
 		sort.Slice(results, func(i, j int) bool {
 			return results[i].Cost > results[j].Cost
 		})
-		fmt.Println("`" + string(results[0].Symbols) + "`")*/
+		fmt.Println("`" + string(input) + "`")
+		fmt.Println("`" + string(results[0].Symbols) + "`")
 
 		/*rng := rand.New(rand.NewSource(1))
 
