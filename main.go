@@ -692,6 +692,57 @@ var (
 	FlagPlot = flag.Bool("plot", false, "plot the embeddings")
 )
 
+// Markov is a markov state
+type Markov [2]byte
+
+// Iterate iterates the markov state
+func (m *Markov) Iterate(s byte) {
+	m[0], m[1] = m[1], s
+}
+
+// Bucket is the entry in a markov model
+type Bucket struct {
+	Entries []Fisher
+}
+
+// Model is a markov model
+type Model struct {
+	Model [2]map[Markov]*Bucket
+}
+
+// NewModel creates a new model
+func NewModel() (model Model) {
+	for i := range model.Model {
+		model.Model[i] = make(map[Markov]*Bucket)
+	}
+	return model
+}
+
+// Set sets an entry
+func (m *Model) Set(markov Markov, entry Fisher) {
+	for i := range 2 {
+		bucket := m.Model[i][markov]
+		if bucket == nil {
+			bucket = &Bucket{}
+		}
+		bucket.Entries = append(bucket.Entries, entry)
+		m.Model[i][markov] = bucket
+		markov[i] = 0
+	}
+}
+
+// Get gets an entry
+func (m *Model) Get(markov Markov) *Bucket {
+	for i := range 2 {
+		bucket := m.Model[i][markov]
+		if bucket != nil {
+			return bucket
+		}
+		markov[i] = 0
+	}
+	return nil
+}
+
 func main() {
 	flag.Parse()
 
@@ -770,25 +821,17 @@ func main() {
 		}
 
 		rng := rand.New(rand.NewSource(1))
-		type Markov [2]byte
-		type Bucket struct {
-			Entries []Fisher
-		}
+
 		var markov Markov
-		model := make(map[Markov]*Bucket)
+		model := NewModel()
 		for _, entry := range cp {
-			bucket := model[markov]
-			if bucket == nil {
-				bucket = &Bucket{}
-			}
-			bucket.Entries = append(bucket.Entries, entry)
-			model[markov] = bucket
-			markov[0], markov[1] = markov[1], entry.L
+			model.Set(markov, entry)
+			markov.Iterate(entry.L)
 		}
 		symbols := make([]byte, 0, 33)
 		current := cp[len(cp)-1].Embedding
 		for range 33 {
-			bucket := model[markov]
+			bucket := model.Get(markov)
 			d := make([]float64, len(bucket.Entries))
 			sum := 0.0
 			for i, entry := range bucket.Entries {
@@ -804,9 +847,10 @@ func main() {
 					break
 				}
 			}
-			symbols = append(symbols, bucket.Entries[index].L)
+			symbol := bucket.Entries[index].L
+			symbols = append(symbols, symbol)
 			current = bucket.Entries[index].Embedding
-			markov[0], markov[1] = markov[1], bucket.Entries[index].L
+			markov.Iterate(symbol)
 		}
 		fmt.Println("`" + string(input) + "`")
 		fmt.Println("`" + string(symbols) + "`")
