@@ -450,7 +450,7 @@ func LearnEmbeddingAlpha(iris []Fisher, size, width int) []Fisher {
 	sa := tf64.T(tf64.Mul(tf64.Dropout(tf64.Square(set.Get("i")), dropout), tf64.T(l1)))
 	loss := tf64.Avg(tf64.Quadratic(l1, sa))
 
-	for iteration := range 512 {
+	for iteration := range 256 {
 		pow := func(x float64) float64 {
 			y := math.Pow(x, float64(iteration+1))
 			if math.IsNaN(y) || math.IsInf(y, 0) {
@@ -539,9 +539,9 @@ func LearnEmbeddingAlpha(iris []Fisher, size, width int) []Fisher {
 	for i := range cp {
 		cp[i].Embedding = I.X[i*width : (i+1)*width]
 	}
-	sort.Slice(cp, func(i, j int) bool {
+	/*sort.Slice(cp, func(i, j int) bool {
 		return cp[i].Cluster < cp[j].Cluster
-	})
+	})*/
 	return cp
 }
 
@@ -703,7 +703,7 @@ func main() {
 		book := make([]Fisher, 0, 8)
 		offset := 3 * 1024
 		input := []byte{}
-		for i, symbol := range books[1].Text[offset : offset+150] {
+		for i, symbol := range books[1].Text[offset : offset+1024] {
 			b := Fisher{
 				Measures: make([]float64, 256),
 				L:        symbol,
@@ -747,6 +747,74 @@ func main() {
 				panic(err)
 			}
 		}
+
+		dot := func(a, b []float64) float64 {
+			x := 0.0
+			for i, value := range a {
+				x += value * b[i]
+			}
+			return x
+		}
+
+		cs := func(a, b []float64) float64 {
+			ab := dot(a, b)
+			aa := dot(a, a)
+			bb := dot(b, b)
+			if aa <= 0 {
+				return 0
+			}
+			if bb <= 0 {
+				return 0
+			}
+			return ab / (math.Sqrt(aa) * math.Sqrt(bb))
+		}
+
+		rng := rand.New(rand.NewSource(1))
+		search := func() ([]byte, float64) {
+			result, cost := []byte{}, 0.0
+			current := cp[len(cp)-1]
+			for range 33 {
+				d := make([]float64, len(cp))
+				for i := range cp {
+					d[i] = cs(current.Embedding, cp[i].Embedding)
+				}
+				sum := 0.0
+				for _, value := range d {
+					sum += value
+				}
+				total, selected, index := 0.0, rng.Float64(), 0
+				for i := range d {
+					total += d[i] / sum
+					if selected < total {
+						index = i
+						break
+					}
+				}
+				for i, value := range cp[index].Embedding {
+					current.Embedding[i] += value
+				}
+				result = append(result, cp[index].L)
+				cost += d[index] / sum
+			}
+			return result, cost
+		}
+		fmt.Println("`" + string(input) + "`")
+		type Result struct {
+			Symbols []byte
+			Cost    float64
+		}
+		results := make([]Result, 0, 8)
+		for range 8 * 1024 {
+			symbols, cost := search()
+			results = append(results, Result{
+				Symbols: symbols,
+				Cost:    cost,
+			})
+		}
+		sort.Slice(results, func(i, j int) bool {
+			return results[i].Cost > results[j].Cost
+		})
+		fmt.Println("`" + string(results[0].Symbols) + "`")
 
 		/*rng := rand.New(rand.NewSource(1))
 
