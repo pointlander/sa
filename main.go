@@ -841,7 +841,7 @@ func main() {
 				d := make([]float64, len(bucket.Entries))
 				sum := 0.0
 				for i, entry := range bucket.Entries {
-					x := cs(current, entry.Embedding)
+					x := cs(current, entry.Embedding) + 1
 					d[i] = x
 					sum += x
 				}
