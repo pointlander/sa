@@ -770,7 +770,48 @@ func main() {
 		}
 
 		rng := rand.New(rand.NewSource(1))
-		search := func() ([]byte, float64) {
+		type Markov [2]byte
+		type Bucket struct {
+			Entries []Fisher
+		}
+		var markov Markov
+		model := make(map[Markov]*Bucket)
+		for _, entry := range cp {
+			bucket := model[markov]
+			if bucket == nil {
+				bucket = &Bucket{}
+			}
+			bucket.Entries = append(bucket.Entries, entry)
+			model[markov] = bucket
+			markov[0], markov[1] = markov[1], entry.L
+		}
+		symbols := make([]byte, 0, 33)
+		current := cp[len(cp)-1].Embedding
+		for range 33 {
+			bucket := model[markov]
+			d := make([]float64, len(bucket.Entries))
+			sum := 0.0
+			for i, entry := range bucket.Entries {
+				x := cs(current, entry.Embedding)
+				d[i] = x
+				sum += x
+			}
+			total, selected, index := 0.0, rng.Float64(), 0
+			for i, value := range d {
+				total += value / sum
+				if selected < total {
+					index = i
+					break
+				}
+			}
+			symbols = append(symbols, bucket.Entries[index].L)
+			current = bucket.Entries[index].Embedding
+			markov[0], markov[1] = markov[1], bucket.Entries[index].L
+		}
+		fmt.Println("`" + string(input) + "`")
+		fmt.Println("`" + string(symbols) + "`")
+
+		/*search := func() ([]byte, float64) {
 			result, cost := []byte{}, 0.0
 			current := cp[len(cp)-1]
 			for range 33 {
@@ -814,7 +855,7 @@ func main() {
 		sort.Slice(results, func(i, j int) bool {
 			return results[i].Cost > results[j].Cost
 		})
-		fmt.Println("`" + string(results[0].Symbols) + "`")
+		fmt.Println("`" + string(results[0].Symbols) + "`")*/
 
 		/*rng := rand.New(rand.NewSource(1))
 
