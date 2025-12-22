@@ -743,251 +743,257 @@ func (m *Model) Get(markov Markov) *Bucket {
 	return nil
 }
 
-func main() {
-	flag.Parse()
-
-	if *FlagBook {
-		const (
-			Eta = 1.0e-3
-		)
-		books := LoadBooks()
-		book := make([]Fisher, 0, 8)
-		offset := 3 * 1024
-		input := []byte{}
-		for i, symbol := range books[1].Text[offset : offset+2*1024] {
-			b := Fisher{
-				Measures: make([]float64, 256),
-				L:        symbol,
-				Index:    i,
-			}
-			b.Measures[symbol] = 1
-			input = append(input, symbol)
-			book = append(book, b)
+// Next finds the next symbol
+func Next(input []byte) byte {
+	const (
+		Eta = 1.0e-3
+	)
+	book := make([]Fisher, 0, 8)
+	for i, symbol := range input {
+		b := Fisher{
+			Measures: make([]float64, 256),
+			L:        symbol,
+			Index:    i,
 		}
-		fmt.Println(string(input))
-		width := 5
-		if *FlagPlot {
-			width = 2
-		}
-		cp := LearnEmbeddingAlpha(book, 256, width)
+		b.Measures[symbol] = 1
+		input = append(input, symbol)
+		book = append(book, b)
+	}
+	fmt.Println(string(input))
+	width := 5
+	if *FlagPlot {
+		width = 2
+	}
+	cp := LearnEmbeddingAlpha(book, 256, width)
 
-		if *FlagPlot {
-			points := make(plotter.XYs, 0, 8)
-			for _, point := range cp {
-				embedding := point.Embedding
-				points = append(points, plotter.XY{X: embedding[0], Y: embedding[1]})
-				fmt.Println(embedding[0], embedding[1])
-			}
-
-			p := plot.New()
-
-			p.Title.Text = "x vs y"
-			p.X.Label.Text = "x"
-			p.Y.Label.Text = "y"
-
-			scatter, err := plotter.NewScatter(points)
-			if err != nil {
-				panic(err)
-			}
-			scatter.GlyphStyle.Radius = vg.Length(1)
-			scatter.GlyphStyle.Shape = draw.CircleGlyph{}
-			p.Add(scatter)
-
-			err = p.Save(8*vg.Inch, 8*vg.Inch, "clusters_text.png")
-			if err != nil {
-				panic(err)
-			}
+	if *FlagPlot {
+		points := make(plotter.XYs, 0, 8)
+		for _, point := range cp {
+			embedding := point.Embedding
+			points = append(points, plotter.XY{X: embedding[0], Y: embedding[1]})
+			fmt.Println(embedding[0], embedding[1])
 		}
 
-		dot := func(a, b []float64) float64 {
-			x := 0.0
-			for i, value := range a {
-				x += value * b[i]
-			}
-			return x
-		}
+		p := plot.New()
 
-		cs := func(a, b []float64) float64 {
-			ab := dot(a, b)
-			aa := dot(a, a)
-			bb := dot(b, b)
-			if aa <= 0 {
-				return 0
-			}
-			if bb <= 0 {
-				return 0
-			}
-			return ab / (math.Sqrt(aa) * math.Sqrt(bb))
-		}
+		p.Title.Text = "x vs y"
+		p.X.Label.Text = "x"
+		p.Y.Label.Text = "y"
 
-		rng := rand.New(rand.NewSource(1))
+		scatter, err := plotter.NewScatter(points)
+		if err != nil {
+			panic(err)
+		}
+		scatter.GlyphStyle.Radius = vg.Length(1)
+		scatter.GlyphStyle.Shape = draw.CircleGlyph{}
+		p.Add(scatter)
 
-		var markov Markov
-		model := NewModel()
-		for _, entry := range cp {
-			model.Set(markov, entry)
-			markov.Iterate(entry.L)
+		err = p.Save(8*vg.Inch, 8*vg.Inch, "clusters_text.png")
+		if err != nil {
+			panic(err)
 		}
-		type Result struct {
-			Symbols []byte
-			Cost    float64
+	}
+
+	dot := func(a, b []float64) float64 {
+		x := 0.0
+		for i, value := range a {
+			x += value * b[i]
 		}
-		process := func(markov Markov) Result {
-			symbols := make([]byte, 0, 33)
-			current := cp[len(cp)-1].Embedding
-			cost := 0.0
-			for range 33 {
-				bucket := model.Get(markov)
-				d := make([]float64, len(bucket.Entries))
-				sum := 0.0
-				for i, entry := range bucket.Entries {
-					x := cs(current, entry.Embedding) + 1
-					d[i] = x
-					sum += x
+		return x
+	}
+
+	cs := func(a, b []float64) float64 {
+		ab := dot(a, b)
+		aa := dot(a, a)
+		bb := dot(b, b)
+		if aa <= 0 {
+			return 0
+		}
+		if bb <= 0 {
+			return 0
+		}
+		return ab / (math.Sqrt(aa) * math.Sqrt(bb))
+	}
+
+	rng := rand.New(rand.NewSource(1))
+
+	var markov Markov
+	model := NewModel()
+	for _, entry := range cp {
+		model.Set(markov, entry)
+		markov.Iterate(entry.L)
+	}
+	type Result struct {
+		Symbols []byte
+		Cost    float64
+	}
+	process := func(markov Markov) Result {
+		symbols := make([]byte, 0, 33)
+		current := cp[len(cp)-1].Embedding
+		cost := 0.0
+		for range 33 {
+			bucket := model.Get(markov)
+			d := make([]float64, len(bucket.Entries))
+			sum := 0.0
+			for i, entry := range bucket.Entries {
+				x := cs(current, entry.Embedding) + 1
+				d[i] = x
+				sum += x
+			}
+			total, selected, index := 0.0, rng.Float64(), 0
+			for i, value := range d {
+				total += value / sum
+				if selected < total {
+					index = i
+					break
 				}
-				total, selected, index := 0.0, rng.Float64(), 0
-				for i, value := range d {
-					total += value / sum
-					if selected < total {
-						index = i
-						break
-					}
-				}
-				symbol := bucket.Entries[index].L
-				symbols = append(symbols, symbol)
-				cost += d[index] / sum
-				current = bucket.Entries[index].Embedding
-				markov.Iterate(symbol)
 			}
-			return Result{
-				Symbols: symbols,
-				Cost:    cost,
-			}
+			symbol := bucket.Entries[index].L
+			symbols = append(symbols, symbol)
+			cost += d[index] / sum
+			current = bucket.Entries[index].Embedding
+			markov.Iterate(symbol)
 		}
-		results := make([]Result, 0, 256*1024)
-		for range 256 * 1024 {
-			result := process(markov)
-			results = append(results, result)
+		return Result{
+			Symbols: symbols,
+			Cost:    cost,
 		}
-		sort.Slice(results, func(i, j int) bool {
-			return results[i].Cost > results[j].Cost
-		})
-		fmt.Println("`" + string(input) + "`")
-		fmt.Println("`" + string(results[0].Symbols) + "`")
+	}
+	results := make([]Result, 0, 256*1024)
+	for range 256 * 1024 {
+		result := process(markov)
+		results = append(results, result)
+	}
+	sort.Slice(results, func(i, j int) bool {
+		return results[i].Cost > results[j].Cost
+	})
+	fmt.Println("`" + string(input) + "`")
+	fmt.Println("`" + string(results[0].Symbols) + "`")
 
-		/*rng := rand.New(rand.NewSource(1))
+	/*rng := rand.New(rand.NewSource(1))
 
-		others := make([]tf64.Set, len(book))
-		for i := range book {
-			others[i] = tf64.NewSet()
-			others[i].Add("input", 2)
-			others[i].Add("output", 256)
-			input := others[i].ByName["input"]
-			input.X = append(input.X, book[i].Embedding...)
-			output := others[i].ByName["output"]
-			output.X = append(output.X, book[i].Measures...)
-		}
+	others := make([]tf64.Set, len(book))
+	for i := range book {
+		others[i] = tf64.NewSet()
+		others[i].Add("input", 2)
+		others[i].Add("output", 256)
+		input := others[i].ByName["input"]
+		input.X = append(input.X, book[i].Embedding...)
+		output := others[i].ByName["output"]
+		output.X = append(output.X, book[i].Measures...)
+	}
 
-		initial := tf64.NewSet()
-		initial.Add("initial", 8)
-		init := initial.ByName["initial"]
-		init.X = init.X[:cap(init.X)]
+	initial := tf64.NewSet()
+	initial.Add("initial", 8)
+	init := initial.ByName["initial"]
+	init.X = init.X[:cap(init.X)]
 
-		set := tf64.NewSet()
-		set.Add("w0", 10, 80)
-		set.Add("b0", 80)
-		set.Add("w1", 160, 8+256)
-		set.Add("b1", 8+256)
-		for i := range set.Weights {
-			w := set.Weights[i]
-			if strings.HasPrefix(w.N, "b") {
-				w.X = w.X[:cap(w.X)]
-				w.States = make([][]float64, StateTotal)
-				for ii := range w.States {
-					w.States[ii] = make([]float64, len(w.X))
-				}
-				continue
-			}
-			factor := math.Sqrt(2.0 / float64(w.S[0]))
-			for range cap(w.X) {
-				w.X = append(w.X, rng.NormFloat64()*factor)
-			}
+	set := tf64.NewSet()
+	set.Add("w0", 10, 80)
+	set.Add("b0", 80)
+	set.Add("w1", 160, 8+256)
+	set.Add("b1", 8+256)
+	for i := range set.Weights {
+		w := set.Weights[i]
+		if strings.HasPrefix(w.N, "b") {
+			w.X = w.X[:cap(w.X)]
 			w.States = make([][]float64, StateTotal)
 			for ii := range w.States {
 				w.States[ii] = make([]float64, len(w.X))
 			}
+			continue
+		}
+		factor := math.Sqrt(2.0 / float64(w.S[0]))
+		for range cap(w.X) {
+			w.X = append(w.X, rng.NormFloat64()*factor)
+		}
+		w.States = make([][]float64, StateTotal)
+		for ii := range w.States {
+			w.States[ii] = make([]float64, len(w.X))
+		}
+	}
+
+	l0 := tf64.Everett(tf64.Add(tf64.Mul(set.Get("w0"), tf64.Concat(others[0].Get("input"), initial.Get("initial"))), set.Get("b0")))
+	l1 := tf64.Add(tf64.Mul(set.Get("w1"), l0), set.Get("b1"))
+	begin, end := 8, 8+256
+	options := map[string]interface{}{
+		"begin": &begin,
+		"end":   &end,
+	}
+	loss := tf64.Quadratic(others[0].Get("output"), tf64.Slice(l1, options))
+
+	begin2, end2 := 0, 8
+	options2 := map[string]interface{}{
+		"begin": &begin2,
+		"end":   &end2,
+	}
+	for i := range book[1:] {
+		l0 = tf64.Everett(tf64.Add(tf64.Mul(set.Get("w0"), tf64.Concat(others[i+1].Get("input"), tf64.Slice(l1, options2))), set.Get("b0")))
+		l1 = tf64.Add(tf64.Mul(set.Get("w1"), l0), set.Get("b1"))
+		loss = tf64.Add(tf64.Quadratic(others[i+1].Get("output"), tf64.Slice(l1, options)), loss)
+	}
+
+	for iteration := range 512 {
+		pow := func(x float64) float64 {
+			y := math.Pow(x, float64(iteration+1))
+			if math.IsNaN(y) || math.IsInf(y, 0) {
+				return 0
+			}
+			return y
 		}
 
-		l0 := tf64.Everett(tf64.Add(tf64.Mul(set.Get("w0"), tf64.Concat(others[0].Get("input"), initial.Get("initial"))), set.Get("b0")))
-		l1 := tf64.Add(tf64.Mul(set.Get("w1"), l0), set.Get("b1"))
-		begin, end := 8, 8+256
-		options := map[string]interface{}{
-			"begin": &begin,
-			"end":   &end,
+		set.Zero()
+		initial.Zero()
+		for i := range others {
+			others[i].Zero()
 		}
-		loss := tf64.Quadratic(others[0].Get("output"), tf64.Slice(l1, options))
-
-		begin2, end2 := 0, 8
-		options2 := map[string]interface{}{
-			"begin": &begin2,
-			"end":   &end2,
-		}
-		for i := range book[1:] {
-			l0 = tf64.Everett(tf64.Add(tf64.Mul(set.Get("w0"), tf64.Concat(others[i+1].Get("input"), tf64.Slice(l1, options2))), set.Get("b0")))
-			l1 = tf64.Add(tf64.Mul(set.Get("w1"), l0), set.Get("b1"))
-			loss = tf64.Add(tf64.Quadratic(others[i+1].Get("output"), tf64.Slice(l1, options)), loss)
-		}
-
-		for iteration := range 512 {
-			pow := func(x float64) float64 {
-				y := math.Pow(x, float64(iteration+1))
-				if math.IsNaN(y) || math.IsInf(y, 0) {
-					return 0
-				}
-				return y
-			}
-
-			set.Zero()
-			initial.Zero()
-			for i := range others {
-				others[i].Zero()
-			}
-			l := tf64.Gradient(loss).X[0]
-			if math.IsNaN(float64(l)) || math.IsInf(float64(l), 0) {
-				fmt.Println(iteration, l)
-				return
-			}
-
-			norm := 0.0
-			for _, p := range set.Weights {
-				for _, d := range p.D {
-					norm += d * d
-				}
-			}
-			norm = math.Sqrt(norm)
-			b1, b2 := pow(B1), pow(B2)
-			scaling := 1.0
-			if norm > 1 {
-				scaling = 1 / norm
-			}
-			for _, w := range set.Weights {
-				for ii, d := range w.D {
-					g := d * scaling
-					m := B1*w.States[StateM][ii] + (1-B1)*g
-					v := B2*w.States[StateV][ii] + (1-B2)*g*g
-					w.States[StateM][ii] = m
-					w.States[StateV][ii] = v
-					mhat := m / (1 - b1)
-					vhat := v / (1 - b2)
-					if vhat < 0 {
-						vhat = 0
-					}
-					w.X[ii] -= Eta * mhat / (math.Sqrt(vhat) + 1e-8)
-				}
-			}
+		l := tf64.Gradient(loss).X[0]
+		if math.IsNaN(float64(l)) || math.IsInf(float64(l), 0) {
 			fmt.Println(iteration, l)
-		}*/
+			return
+		}
 
+		norm := 0.0
+		for _, p := range set.Weights {
+			for _, d := range p.D {
+				norm += d * d
+			}
+		}
+		norm = math.Sqrt(norm)
+		b1, b2 := pow(B1), pow(B2)
+		scaling := 1.0
+		if norm > 1 {
+			scaling = 1 / norm
+		}
+		for _, w := range set.Weights {
+			for ii, d := range w.D {
+				g := d * scaling
+				m := B1*w.States[StateM][ii] + (1-B1)*g
+				v := B2*w.States[StateV][ii] + (1-B2)*g*g
+				w.States[StateM][ii] = m
+				w.States[StateV][ii] = v
+				mhat := m / (1 - b1)
+				vhat := v / (1 - b2)
+				if vhat < 0 {
+					vhat = 0
+				}
+				w.X[ii] -= Eta * mhat / (math.Sqrt(vhat) + 1e-8)
+			}
+		}
+		fmt.Println(iteration, l)
+	}*/
+
+	return results[0].Symbols[0]
+}
+
+func main() {
+	flag.Parse()
+
+	if *FlagBook {
+		offset := 3 * 1024
+		books := LoadBooks()
+		symbol := Next(books[1].Text[offset : offset+2*1024])
+		fmt.Println(symbol)
 		return
 	}
 
