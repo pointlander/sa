@@ -690,6 +690,8 @@ var (
 	FlagBook = flag.Bool("book", false, "book mode")
 	// FlagPlot plots the embeddings
 	FlagPlot = flag.Bool("plot", false, "plot the embeddings")
+	// FlagIter is the number of iterations
+	FlagIter = flag.Int("iter", 1, "the number of iterations")
 )
 
 // Markov is a markov state
@@ -990,10 +992,16 @@ func main() {
 	flag.Parse()
 
 	if *FlagBook {
+		generated := []byte{}
 		offset := 3 * 1024
 		books := LoadBooks()
-		symbol := Next(books[1].Text[offset : offset+2*1024])
-		fmt.Println(symbol)
+		input := books[1].Text[offset : offset+2*1024]
+		for range *FlagIter {
+			symbol := Next(append(input, generated...))
+			generated = append(generated, symbol)
+		}
+		fmt.Println("`" + string(input) + "`")
+		fmt.Println("`" + string(generated) + "`")
 		return
 	}
 
