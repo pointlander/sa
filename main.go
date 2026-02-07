@@ -1005,7 +1005,11 @@ func main() {
 		return
 	}
 
+	rng := rand.New(rand.NewSource(1))
 	iris := Load()
+	rng.Shuffle(len(iris), func(i, j int) {
+		iris[i], iris[j] = iris[j], iris[i]
+	})
 	average := make([]float64, 4)
 	for _, row := range iris {
 		for i, value := range row.Measures {
